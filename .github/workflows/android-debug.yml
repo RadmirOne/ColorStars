@@ -25,6 +25,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The SDK's old "tools" package is no longer available.
+          packages: 'platform-tools'
 
       - name: Install Android SDK 35
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
@@ -35,8 +38,8 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Assemble debug APK
-        run: gradle :androidApp:assembleDebug --stacktrace
+      - name: Test engine and assemble debug APK
+        run: gradle :shared:testDebugUnitTest :androidApp:assembleDebug --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
