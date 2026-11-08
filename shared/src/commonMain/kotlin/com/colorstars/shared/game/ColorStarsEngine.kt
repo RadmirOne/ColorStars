@@ -248,7 +248,7 @@ object ColorStarsEngine {
         val storage = state.storage.toMutableList()
         while (true) {
             val found = storage.withIndex().firstNotNullOfOrNull { (slot, color) ->
-                findExposedColor(glass, color)?.let { slot to it }
+                findExposedColor(glass, color, state.boardRows, state.boardColumns)?.let { slot to it }
             } ?: break
             val (slot, piece) = found
             effects += GameEffect.Projectile(piece.color, StarOrigin.Storage(slot), piece)
