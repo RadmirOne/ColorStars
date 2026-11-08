@@ -1,11 +1,25 @@
 package com.colorstars.shared.game
 
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** The engine deliberately has no Compose or Android dependency. */
 enum class StarColor { BLUE, GOLD, GREEN, PINK, PURPLE }
 
-data class GlassPiece(val id: Int, val row: Int, val column: Int, val color: StarColor)
+data class GlassPiece(val id: Int, val row: Int, val column: Int, val color: StarColor) {
+    val topY: Float get() = minOf(glassCorner(column, row).y, glassCorner(column + 1, row).y)
+}
+
+data class GlassVertex(val x: Float, val y: Float)
+
+// Shared by rendering and target selection so priority follows the actual vertices.
+fun glassCorner(column: Int, row: Int): GlassVertex = GlassVertex(
+    column + if (column == 0 || column == ColorStarsEngine.BOARD_COLUMNS) 0f
+        else sin((column * 7 + row * 13).toFloat()) * .12f,
+    row + if (row == 0 || row == ColorStarsEngine.BOARD_ROWS) 0f
+        else cos((column * 11 + row * 5).toFloat()) * .13f,
+)
 
 enum class GameStatus { PLAYING, LOST, WON }
 enum class SelectionMode { NONE, PICK_STAR, SHATTER_GLASS }
@@ -47,6 +61,10 @@ object ColorStarsEngine {
     const val CONTINUE_COST = 100
     const val BOOSTER_COST = 120
 
+    private val targetPriority = compareBy<GlassPiece> { it.topY }
+        .thenBy { abs(it.column + .5f - BOARD_COLUMNS / 2f) }
+        .thenByDescending { it.column }.thenBy { it.id }
+
     // A symmetric silhouette with transparent corridors around it.
     private val silhouette = listOf("011110", "111111", "111111", "011110", "001100")
 
@@ -69,11 +87,7 @@ object ColorStarsEngine {
         val destructionOrder = mutableListOf<StarColor>()
         while (remaining.isNotEmpty()) {
             val exposed = remaining.filter { isExposed(it, remaining) }
-            val next = exposed.sortedWith(
-                compareByDescending<GlassPiece> { it.row }
-                    .thenBy { abs(it.column - ((destructionOrder.size + level) % BOARD_COLUMNS)) }
-                    .thenBy { it.id }
-            ).first()
+            val next = exposed.minWith(targetPriority)
             destructionOrder += next.color
             remaining.remove(next)
         }
@@ -134,7 +148,7 @@ object ColorStarsEngine {
             mode = SelectionMode.NONE,
         )
         val effects = mutableListOf<GameEffect>()
-        val target = findExposedColor(next.glass, color, queue, state.columns)
+        val target = findExposedColor(next.glass, color)
         if (target != null) {
             next = next.copy(glass = next.glass - target)
             effects += GameEffect.Projectile(color, StarOrigin.Queue(queue, row), target)
@@ -179,7 +193,7 @@ object ColorStarsEngine {
         var glass = state.glass
         val removed = state.storage.take(2)
         removed.forEach { color ->
-            val target = findExposedColor(glass, color, null, state.columns)
+            val target = findExposedColor(glass, color)
                 ?: glass.firstOrNull { it.color == color }
             if (target != null) {
                 glass = glass - target
@@ -207,11 +221,9 @@ object ColorStarsEngine {
         return state.copy(coins = state.coins - BOOSTER_COST, boosters = updated)
     }
 
-    private fun findExposedColor(glass: List<GlassPiece>, color: StarColor, queue: Int?, queueCount: Int): GlassPiece? {
-        val preferredColumn = queue?.let { ((it + 0.5f) * BOARD_COLUMNS / queueCount).toInt() } ?: BOARD_COLUMNS / 2
+    private fun findExposedColor(glass: List<GlassPiece>, color: StarColor): GlassPiece? {
         return glass.asSequence().filter { it.color == color && isExposed(it, glass) }
-            .sortedWith(compareByDescending<GlassPiece> { it.row }
-                .thenBy { abs(it.column - preferredColumn) }.thenBy { it.id }).firstOrNull()
+            .minWithOrNull(targetPriority)
     }
 
     private fun releaseStored(state: GameState, effects: MutableList<GameEffect>): GameState {
@@ -219,7 +231,7 @@ object ColorStarsEngine {
         val storage = state.storage.toMutableList()
         while (true) {
             val found = storage.withIndex().firstNotNullOfOrNull { (slot, color) ->
-                findExposedColor(glass, color, null, state.columns)?.let { slot to it }
+                findExposedColor(glass, color)?.let { slot to it }
             } ?: break
             val (slot, piece) = found
             effects += GameEffect.Projectile(piece.color, StarOrigin.Storage(slot), piece)
@@ -233,7 +245,7 @@ object ColorStarsEngine {
         state.glass.isEmpty() -> state.copy(status = GameStatus.WON, mode = SelectionMode.NONE)
         state.status == GameStatus.LOST -> state
         state.queues.all { it.isEmpty() } && state.storage.none { color ->
-            findExposedColor(state.glass, color, null, state.columns) != null
+            findExposedColor(state.glass, color) != null
         } -> state.copy(status = GameStatus.LOST)
         else -> state
     }

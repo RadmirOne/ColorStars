@@ -6,9 +6,9 @@ package com.colorstars.shared.game
 data class GridPoint(val column: Int, val row: Int)
 
 object ProjectileRouter {
-    fun route(glass: List<GlassPiece>, target: GlassPiece, entryColumn: Int): List<GridPoint> {
+    fun route(glass: List<GlassPiece>, target: GlassPiece, entryColumn: Int, fromTop: Boolean = false): List<GridPoint> {
         val occupied = glass.map { GridPoint(it.column, it.row) }.toSet()
-        val start = GridPoint(entryColumn.coerceIn(0, ColorStarsEngine.BOARD_COLUMNS - 1), ColorStarsEngine.BOARD_ROWS)
+        val start = GridPoint(entryColumn.coerceIn(0, ColorStarsEngine.BOARD_COLUMNS - 1), if (fromTop) -1 else ColorStarsEngine.BOARD_ROWS)
         val openNeighbors = neighbors(GridPoint(target.column, target.row)).filter { it !in occupied }
         val explored = ArrayDeque<GridPoint>()
         val previous = mutableMapOf<GridPoint, GridPoint?>()

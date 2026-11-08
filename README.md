@@ -5,7 +5,8 @@ Android puzzle game prototype built with Kotlin and Compose Multiplatform (the e
 ## Features in this PR
 - Interactive stained-glass mosaic with exposed pieces and five jewel colors.
 - 4 queues on the first level; 5 queues on later levels, with 4 visible stars per queue.
-- Selecting a queue head removes the closest matching reachable glass fragment, or stores the star when none is exposed.
+- Selecting a queue head removes a reachable matching glass fragment, prioritizing its highest vertex, then proximity to the board center, then the rightmost fragment. If none is exposed, the star goes into storage.
+- Stars slide up on selection; exhausted queues fade out and the remaining queues smoothly redistribute across the screen.
 - 4 storage wells with 2 possible additions (6 max), auto-release of stored stars after pieces become reachable.
 - Three boosters: add a well, shatter any piece, or select any of the 4 visible stars in a queue.
 - Moving color-matched magical projectile with a **short** glowing tail. Route search traverses empty cells, no full path is drawn.

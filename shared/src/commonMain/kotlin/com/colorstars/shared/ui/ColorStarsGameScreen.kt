@@ -1,6 +1,7 @@
 package com.colorstars.shared.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -35,6 +36,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -43,11 +49,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -62,13 +70,17 @@ import com.colorstars.shared.game.ColorStarsEngine
 import com.colorstars.shared.game.GameEffect
 import com.colorstars.shared.game.GameState
 import com.colorstars.shared.game.GameStatus
+import com.colorstars.shared.game.GlassVertex
+import com.colorstars.shared.game.ProjectileFlight
 import com.colorstars.shared.game.GlassPiece
-import com.colorstars.shared.game.GridPoint
+import com.colorstars.shared.game.PendingGameEffect
+import com.colorstars.shared.game.prepareMoveEffects
+import com.colorstars.shared.game.visibleGlass
 import com.colorstars.shared.game.MoveResult
-import com.colorstars.shared.game.ProjectileRouter
 import com.colorstars.shared.game.SelectionMode
 import com.colorstars.shared.game.StarColor
 import com.colorstars.shared.game.StarOrigin
+import com.colorstars.shared.game.glassCorner
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -92,36 +104,34 @@ private data class BoardGeometry(val left: Float, val top: Float, val tileWidth:
     val width: Float get() = tileWidth * ColorStarsEngine.BOARD_COLUMNS
     val height: Float get() = tileHeight * ColorStarsEngine.BOARD_ROWS
     fun tileCenter(piece: GlassPiece): Offset = Offset(left + (piece.column + .5f) * tileWidth, top + (piece.row + .5f) * tileHeight)
-    fun gridCenter(point: GridPoint): Offset = Offset(left + (point.column + .5f) * tileWidth, top + (point.row + .5f) * tileHeight)
 }
 
 @Composable
 fun ColorStarsGameScreen() {
     var game by remember { mutableStateOf(ColorStarsEngine.newGame()) }
-    var pending by remember { mutableStateOf<MoveResult?>(null) }
-    var activeEffect by remember { mutableStateOf<GameEffect?>(null) }
+    var flights by remember { mutableStateOf(emptyList<PendingGameEffect>()) }
+    var nextFlightId by remember { mutableStateOf(0L) }
+    var queueTransition by remember { mutableStateOf<Pair<GameState, MoveResult>?>(null) }
     var purchasing by remember { mutableIntStateOf(-1) }
     var menuOpen by remember { mutableStateOf(false) }
-    val travel = remember { Animatable(0f) }
-    val busy = pending != null
+    val busy = flights.isNotEmpty()
     val onMove: (MoveResult) -> Unit = { move ->
-        if (!busy && move.state != game) {
-            if (move.effects.isEmpty()) game = move.state else pending = move
+        if (move.state != game) {
+            val additions = prepareMoveEffects(game, move, nextFlightId)
+            nextFlightId += additions.size
+            queueTransition = game to move
+            flights = flights + additions
+            // Reserve targets and consume stars now. Animation completion never overwrites newer moves.
+            game = move.state
         }
     }
-
-    LaunchedEffect(pending) {
-        val move = pending ?: return@LaunchedEffect
-        for (effect in move.effects) {
-            activeEffect = effect
-            travel.snapTo(0f)
-            travel.animateTo(1f, tween(if (effect is GameEffect.Projectile) 420 else 270))
+    LaunchedEffect(queueTransition) {
+        if (queueTransition != null) {
+            delay(160)
+            queueTransition = null
         }
-        activeEffect = null
-        game = move.state
-        pending = null
     }
-
+    val displayedGame = game.copy(glass = visibleGlass(game, flights))
     MaterialTheme {
         BoxWithConstraints(
             Modifier.fillMaxSize()
@@ -137,8 +147,8 @@ fun ColorStarsGameScreen() {
             val geometry = with(density) {
                 val width = maxWidth.toPx()
                 val glassPx = glassArea.toPx()
-                val boardWidth = min(width * .84f, 324.dp.toPx())
-                val boardHeight = min(boardWidth * .84f, glassPx * .85f)
+                val boardWidth = min(width * .78f, 324.dp.toPx())
+                val boardHeight = min(boardWidth * .84f, glassPx * .65f)
                 BoardGeometry((width - boardWidth) / 2f, header.toPx() + (glassPx - boardHeight) / 2f,
                     boardWidth / ColorStarsEngine.BOARD_COLUMNS, boardHeight / ColorStarsEngine.BOARD_ROWS)
             }
@@ -150,13 +160,13 @@ fun ColorStarsGameScreen() {
             Column(Modifier.fillMaxSize()) {
                 Header(game, header, onMenu = { menuOpen = true })
                 Mosaic(
-                    game = game,
+                    game = displayedGame,
                     geometry = geometry.copy(top = geometry.top - with(density) { header.toPx() }),
                     modifier = Modifier.fillMaxWidth().height(glassArea),
                     onShatter = { if (!busy) onMove(ColorStarsEngine.shatter(game, it)) },
                 )
                 StorageRow(game, slotsHeight)
-                QueueRows(game, queueHeight, busy) { column, row ->
+                QueueRows(queueTransition?.first ?: game, queueHeight, queueTransition?.second) { column, row ->
                     onMove(ColorStarsEngine.takeStar(game, column, row))
                 }
                 ToolsRow(game, toolsHeight, busy) { index ->
@@ -170,23 +180,22 @@ fun ColorStarsGameScreen() {
                 }
             }
 
-            val effect = activeEffect
-            if (effect != null) {
-                Canvas(Modifier.fillMaxSize()) {
-                    drawMovingEffect(
-                        effect, game, geometry, screenWidth, queueFirstY, with(density) { 48.dp.toPx() }, slotsY,
-                        progress = travel.value,
-                    )
+            flights.forEach { flight ->
+                key(flight.id) {
+                    FlightAnimation(flight, displayedGame.glass,
+                        ready = flights.none { it.id == flight.predecessor },
+                        geometry = geometry, width = screenWidth, queueY = queueFirstY,
+                        rowHeight = with(density) { 48.dp.toPx() }, slotsY = slotsY,
+                        onFinished = { flights = flights.filterNot { it.id == flight.id } })
                 }
             }
-
             if (menuOpen) {
                 GameDialog(
                     title = "ColorStars",
                     message = "Уровень ${game.level}",
                     confirm = "Начать заново",
                     dismiss = "Закрыть",
-                    onConfirm = { game = ColorStarsEngine.newGame(game.level, game.coins, game.boosters); menuOpen = false },
+                    onConfirm = { flights = emptyList(); queueTransition = null; game = ColorStarsEngine.newGame(game.level, game.coins, game.boosters); menuOpen = false },
                     onDismiss = { menuOpen = false },
                 )
             }
@@ -232,6 +241,46 @@ fun ColorStarsGameScreen() {
 }
 
 @Composable
+private fun FlightAnimation(
+    flight: PendingGameEffect, glass: List<GlassPiece>, ready: Boolean,
+    geometry: BoardGeometry, width: Float, queueY: Float, rowHeight: Float, slotsY: Float,
+    onFinished: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val padding = with(density) { 12.dp.toPx() }
+    val candidate = remember(flight, glass, geometry, width, queueY, rowHeight, slotsY, padding) {
+        val effect = flight.effect
+        if (effect is GameEffect.Projectile) {
+            projectilePoints(effectStart(effect.origin, flight.source, width, queueY, rowHeight, slotsY, padding),
+                geometry, flight.source.copy(glass = glass), effect)
+        } else emptyList()
+    }
+    // The shatter booster may intentionally target an enclosed fragment.
+    val shatter = flight.source.mode == SelectionMode.SHATTER_GLASS && candidate.isEmpty()
+    val canLaunch = ready && (flight.effect !is GameEffect.Projectile || candidate.isNotEmpty() || shatter)
+    val plan by rememberUpdatedState(if (canLaunch) candidate else null)
+    val finish by rememberUpdatedState(onFinished)
+    val travel = remember { Animatable(0f) }
+    var path by remember { mutableStateOf<List<Offset>?>(null) }
+    var effect by remember { mutableStateOf(flight.effect) }
+    LaunchedEffect(flight.id) {
+        path = snapshotFlow { plan }.first { it != null }
+        if (flight.effect is GameEffect.Projectile && path!!.isEmpty()) {
+            effect = GameEffect.Break(flight.effect.target)
+        }
+        travel.animateTo(1f, if (effect is GameEffect.Projectile)
+            tween(500, easing = LinearEasing) else tween(180))
+        finish()
+    }
+    if (path != null) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawMovingEffect(effect, flight.source, geometry, width, queueY, rowHeight, slotsY,
+                travel.value, path.orEmpty())
+        }
+    }
+}
+
+@Composable
 private fun Header(game: GameState, height: Dp, onMenu: () -> Unit) {
     Box(Modifier.fillMaxWidth().height(height).background(Color(0x550B142B))) {
         Text("☰", modifier = Modifier.align(Alignment.CenterStart).clickable(onClick = onMenu).padding(horizontal = 20.dp, vertical = 8.dp), color = Pearl, fontSize = 26.sp)
@@ -268,11 +317,6 @@ private fun Mosaic(game: GameState, geometry: BoardGeometry, modifier: Modifier,
                 drawPath(path, color = Color.White.copy(alpha = .53f), style = Stroke(width = 3f))
             }
         }
-        // The central spine binds the floating wing-shaped mosaic together.
-        val x = geometry.left + geometry.width / 2
-        val cy = geometry.top + geometry.height / 2
-        drawLine(Color(0xFFAAA4E8).copy(alpha = .38f), Offset(x, cy - geometry.height * .33f), Offset(x, cy + geometry.height * .35f), strokeWidth = 3.5f, cap = StrokeCap.Round)
-        drawCircle(Color.White.copy(alpha = .65f), radius = 2.5f, center = Offset(x, cy - geometry.height * .33f))
     }
 }
 
@@ -280,11 +324,8 @@ private fun tilePath(tile: GlassPiece, geo: BoardGeometry): Path {
     val c = tile.column
     val r = tile.row
     fun corner(col: Int, row: Int): Offset {
-        val dx = if (col == 0 || col == ColorStarsEngine.BOARD_COLUMNS) 0f else
-            sin((col * 7 + row * 13).toFloat()) * geo.tileWidth * .12f
-        val dy = if (row == 0 || row == ColorStarsEngine.BOARD_ROWS) 0f else
-            cos((col * 11 + row * 5).toFloat()) * geo.tileHeight * .13f
-        return Offset(geo.left + col * geo.tileWidth + dx, geo.top + row * geo.tileHeight + dy)
+        val vertex = glassCorner(col, row)
+        return Offset(geo.left + vertex.x * geo.tileWidth, geo.top + vertex.y * geo.tileHeight)
     }
     val tl = corner(c, r)
     val tr = corner(c + 1, r)
@@ -313,33 +354,77 @@ private fun StorageRow(game: GameState, height: Dp) {
 }
 
 @Composable
-private fun QueueRows(game: GameState, height: Dp, busy: Boolean, onStar: (Int, Int) -> Unit) {
+private fun QueueRows(game: GameState, height: Dp, pending: MoveResult?, onStar: (Int, Int) -> Unit) {
+    val selectableGame = pending?.state ?: game
+    val removed = pending?.effects?.firstNotNullOfOrNull { effect ->
+        when (effect) {
+            is GameEffect.Projectile -> effect.origin as? StarOrigin.Queue
+            is GameEffect.Stored -> effect.origin
+            is GameEffect.Break -> null
+        }
+    }
+    // Animate the consumed star while clicks already address the updated queue.
+    val shift = remember(pending) { Animatable(0f) }
+    LaunchedEffect(pending) {
+        if (removed != null) shift.animateTo(1f, tween(160))
+    }
     val selection = game.mode == SelectionMode.PICK_STAR
     val pulse by rememberInfiniteTransition(label = "star-select").animateFloat(
         initialValue = .24f, targetValue = .9f,
         animationSpec = infiniteRepeatable(tween(620), RepeatMode.Reverse), label = "select-halo"
     )
-    Row(Modifier.fillMaxWidth().height(height).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-        game.queues.forEachIndexed { col, queue ->
-            Box(Modifier.weight(1f).fillMaxHeight()) {
+    val visibleColumns = game.queues.indices.filter { game.queues[it].isNotEmpty() }
+    val nextQueues = pending?.state?.queues ?: game.queues
+    val nextColumns = nextQueues.indices.filter { nextQueues[it].isNotEmpty() }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(height).padding(horizontal = 12.dp)) {
+        visibleColumns.forEachIndexed { index, col ->
+            val queue = game.queues[col]
+            val nextIndex = nextColumns.indexOf(col)
+            val disappearing = nextIndex < 0
+            val oldWidth = maxWidth / visibleColumns.size
+            val newWidth = if (disappearing) oldWidth else maxWidth / nextColumns.size
+            val columnWidth = oldWidth + (newWidth - oldWidth) * shift.value
+            val oldCenter = oldWidth * (index + .5f)
+            val newCenter = if (disappearing) oldCenter else newWidth * (nextIndex + .5f)
+            val columnLeft = oldCenter + (newCenter - oldCenter) * shift.value - columnWidth / 2
+            Box(Modifier.width(columnWidth).fillMaxHeight().graphicsLayer {
+                translationX = columnLeft.toPx()
+                alpha = if (disappearing) 1f - shift.value else 1f
+            }.clipToBounds()) {
                 Canvas(Modifier.fillMaxSize()) {
                     val cx = size.width / 2
-                    drawLine(Lavender.copy(alpha = .09f), Offset(cx, 2f), Offset(cx, size.height), strokeWidth = 12f, cap = StrokeCap.Round)
-                    drawLine(Lavender.copy(alpha = .52f), Offset(cx, 3f), Offset(cx, size.height - 3f), strokeWidth = 2f)
+                    val oldCount = min(queue.size, ColorStarsEngine.MAX_VISIBLE_STARS)
+                    val newCount = min(nextQueues[col].size, ColorStarsEngine.MAX_VISIBLE_STARS)
+                    val visibleCount = oldCount + (newCount - oldCount) * shift.value
+                    val rowHeight = 48.dp.toPx()
+                    val starsTop = (size.height - rowHeight * ColorStarsEngine.MAX_VISIBLE_STARS) / 2f
+                    val endY = (starsTop + (visibleCount - .5f) * rowHeight).coerceAtLeast(3f)
+                    drawLine(Lavender.copy(alpha = .09f), Offset(cx, 2f), Offset(cx, endY), strokeWidth = 12f, cap = StrokeCap.Round)
+                    drawLine(Lavender.copy(alpha = .52f), Offset(cx, 3f), Offset(cx, endY), strokeWidth = 2f)
                 }
-                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    repeat(ColorStarsEngine.MAX_VISIBLE_STARS) { row ->
+                Box(Modifier.align(Alignment.Center).width(48.dp).height(48.dp * ColorStarsEngine.MAX_VISIBLE_STARS)) {
+                    val removedRow = removed?.takeIf { it.column == col }?.row
+                    // Include one offscreen star so it can slide into the last visible slot.
+                    repeat(ColorStarsEngine.MAX_VISIBLE_STARS + if (removedRow != null) 1 else 0) { row ->
+                        if (row == removedRow) return@repeat
                         val color = queue.getOrNull(row)
-                        val enabled = color != null && !busy && ColorStarsEngine.isSelectable(game, col, row)
+                        val selectedRow = if (removedRow != null && row > removedRow) row - 1 else row
+                        val enabled = color != null && ColorStarsEngine.isSelectable(selectableGame, col, selectedRow)
+                        val displacement = if (removedRow != null && row > removedRow) shift.value else 0f
+                        val visualRow = row - displacement
+                        val prominence = (1f - visualRow).coerceIn(0f, 1f)
                         Box(
-                            Modifier.size(48.dp).clickable(enabled = enabled,
-                                interactionSource = remember { MutableInteractionSource() }, indication = null) { onStar(col, row) },
+                            Modifier.size(48.dp).graphicsLayer {
+                                translationY = visualRow * 48.dp.toPx()
+                            }.clickable(enabled = enabled,
+                                interactionSource = remember { MutableInteractionSource() }, indication = null) { onStar(col, selectedRow) },
                             contentAlignment = Alignment.Center,
                         ) {
                             if (color != null) {
-                                Canvas(Modifier.size(if (row == 0) 38.dp else 33.dp)) {
-                                    drawStar(center, size.minDimension * .42f, color.tint(), if (row == 0) 1f else .67f,
-                                        glow = row == 0 || selection, haloOpacity = if (selection) pulse else 0f)
+                                Canvas(Modifier.size(38.dp)) {
+                                    drawStar(center, (33.dp.toPx() + 5.dp.toPx() * prominence) * .42f,
+                                        color.tint(), .67f + .33f * prominence,
+                                        glow = prominence > 0f || selection, haloOpacity = if (selection) pulse else 0f)
                                 }
                             }
                         }
@@ -416,7 +501,7 @@ private fun DrawScope.drawStar(center: Offset, radius: Float, tint: Color, opaci
 
 private fun DrawScope.drawMovingEffect(
     effect: GameEffect, game: GameState, geo: BoardGeometry, width: Float,
-    queueY: Float, queueRowHeight: Float, slotsY: Float, progress: Float,
+    queueY: Float, queueRowHeight: Float, slotsY: Float, progress: Float, flightPoints: List<Offset>,
 ) {
     val target = when (effect) {
         is GameEffect.Projectile -> effect.target
@@ -433,11 +518,7 @@ private fun DrawScope.drawMovingEffect(
         is GameEffect.Stored -> effect.origin
         is GameEffect.Break -> StarOrigin.Booster
     }
-    val start = when (origin) {
-        is StarOrigin.Queue -> Offset(queueCenterX(width, game.columns, origin.column), queueY + origin.row * queueRowHeight)
-        is StarOrigin.Storage -> Offset(width * (origin.slot + .5f) / game.slotCapacity, slotsY)
-        StarOrigin.Booster -> Offset(width / 2, slotsY)
-    }
+    val start = effectStart(origin, game, width, queueY, queueRowHeight, slotsY, 12.dp.toPx())
     if (effect is GameEffect.Stored) {
         val end = Offset(width * (game.storage.size + .5f) / game.slotCapacity, slotsY)
         val position = Offset(start.x + (end.x - start.x) * progress, start.y + (end.y - start.y) * progress)
@@ -446,50 +527,46 @@ private fun DrawScope.drawMovingEffect(
     }
     val shot = effect as GameEffect.Projectile
     val color = shot.color.tint()
-    val column = when (origin) {
-        is StarOrigin.Queue -> ((origin.column + .5f) * ColorStarsEngine.BOARD_COLUMNS / game.columns).toInt()
-        is StarOrigin.Storage -> ((origin.slot + .5f) * ColorStarsEngine.BOARD_COLUMNS / game.slotCapacity).toInt()
-        StarOrigin.Booster -> ColorStarsEngine.BOARD_COLUMNS / 2
-    }
-    val route = ProjectileRouter.route(game.glass, shot.target, column)
-    val points = buildList {
-        add(start)
-        route.forEach { add(geo.gridCenter(it)) }
-        val edge = route.lastOrNull()
-        if (edge != null) {
-            val center = geo.tileCenter(shot.target)
-            val direction = Offset(edge.column - shot.target.column.toFloat(), edge.row - shot.target.row.toFloat())
-            add(Offset(center.x + direction.x * geo.tileWidth * .5f, center.y + direction.y * geo.tileHeight * .5f))
-        } else add(geo.tileCenter(shot.target))
-    }
-    val smooth = smoothPoints(points)
+    if (flightPoints.isEmpty()) return
+    val smooth = flightPoints
     val total = lengthOf(smooth)
     val head = along(smooth, total * progress)
-    val tail = along(smooth, (total * progress - 27.dp.toPx()).coerceAtLeast(0f))
-    drawLine(color.copy(alpha = .19f), tail, head, strokeWidth = 13.dp.toPx(), cap = StrokeCap.Round)
-    drawLine(color.copy(alpha = .78f), tail, head, strokeWidth = 5.dp.toPx(), cap = StrokeCap.Round)
-    drawLine(Color.White.copy(alpha = .54f), along(smooth, (total * progress - 8.dp.toPx()).coerceAtLeast(0f)), head, strokeWidth = 1.6.dp.toPx(), cap = StrokeCap.Round)
-    drawCircle(color.copy(alpha = .21f), radius = 15.dp.toPx(), center = head)
-    drawCircle(color, radius = 6.dp.toPx(), center = head)
-    drawCircle(Color.White, radius = 2.4.dp.toPx(), center = head)
-}
-
-private fun queueCenterX(width: Float, count: Int, index: Int): Float =
-    12f * (width / 390f) + (width - 24f * (width / 390f)) * (index + .5f) / count
-
-private fun smoothPoints(points: List<Offset>): List<Offset> {
-    if (points.size < 3) return points
-    val result = mutableListOf(points.first())
-    for (i in 0 until points.lastIndex) {
-        val a = points[i]
-        val b = points[i + 1]
-        result += Offset(a.x * .75f + b.x * .25f, a.y * .75f + b.y * .25f)
-        result += Offset(a.x * .25f + b.x * .75f, a.y * .25f + b.y * .75f)
+    fun tailPath(length: Float): Path = Path().apply {
+        val end = total * progress
+        val begin = (end - length).coerceAtLeast(0f)
+        repeat(17) { index ->
+            val point = along(smooth, begin + (end - begin) * index / 16f)
+            if (index == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
+        }
     }
-    result += points.last()
-    return result
+    val tail = tailPath(27.dp.toPx())
+    drawPath(tail, color.copy(alpha = .19f), style = Stroke(13.dp.toPx(), cap = StrokeCap.Round))
+    drawPath(tail, color.copy(alpha = .78f), style = Stroke(5.dp.toPx(), cap = StrokeCap.Round))
+    drawPath(tailPath(8.dp.toPx()), Color.White.copy(alpha = .54f), style = Stroke(1.6.dp.toPx(), cap = StrokeCap.Round))
+    drawCircle(color.copy(alpha = .21f), radius = 15.dp.toPx(), center = head)
+    val coreRadius = min(6.dp.toPx(), min(geo.tileWidth, geo.tileHeight) * .16f)
+    drawCircle(color, radius = coreRadius, center = head)
+    drawCircle(Color.White, radius = coreRadius * .4f, center = head)
 }
 
+private fun effectStart(
+    origin: StarOrigin, game: GameState, width: Float, queueY: Float, queueRowHeight: Float, slotsY: Float, padding: Float,
+): Offset = when (origin) {
+        is StarOrigin.Queue -> {
+            val visibleColumns = game.queues.indices.filter { game.queues[it].isNotEmpty() }
+            val index = visibleColumns.indexOf(origin.column)
+
+            Offset(padding + (width - 2 * padding) * (index + .5f) / visibleColumns.size,
+                queueY + origin.row * queueRowHeight)
+        }
+        is StarOrigin.Storage -> Offset(width * (origin.slot + .5f) / game.slotCapacity, slotsY)
+        StarOrigin.Booster -> Offset(width / 2, slotsY)
+    }
+
+private fun projectilePoints(start: Offset, geo: BoardGeometry, game: GameState, shot: GameEffect.Projectile): List<Offset> =
+    ProjectileFlight.route(game.glass, shot.target,
+        GlassVertex((start.x - geo.left) / geo.tileWidth, (start.y - geo.top) / geo.tileHeight)
+    ).map { Offset(geo.left + it.x * geo.tileWidth, geo.top + it.y * geo.tileHeight) }
 private fun lengthOf(points: List<Offset>): Float = points.zipWithNext { a, b -> hypot(b.x - a.x, b.y - a.y) }.sum()
 
 private fun along(points: List<Offset>, distance: Float): Offset {

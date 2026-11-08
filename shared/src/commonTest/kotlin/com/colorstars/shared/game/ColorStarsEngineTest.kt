@@ -6,6 +6,58 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ColorStarsEngineTest {
+    private fun shotAt(glass: List<GlassPiece>, queue: Int = 0): GlassPiece {
+        val state = GameState(
+            level = 1, columns = 4,
+            queues = List(4) { listOf(StarColor.BLUE) }, glass = glass,
+        )
+        return ColorStarsEngine.takeStar(state, queue).effects
+            .filterIsInstance<GameEffect.Projectile>().first().target
+    }
+
+    @Test fun targetPriorityPrefersHighestVertexOverLowerNearbyFragment() {
+        val upper = GlassPiece(1, 0, 0, StarColor.BLUE)
+        val lower = GlassPiece(2, 4, 3, StarColor.BLUE)
+        for (queue in 0..3) assertEquals(upper, shotAt(listOf(lower, upper), queue))
+    }
+
+    @Test fun targetPriorityUsesActualVertexHeightWithinTheSameRow() {
+        val upperVertex = GlassPiece(1, 1, 0, StarColor.BLUE)
+        val nearerCenter = GlassPiece(2, 1, 2, StarColor.BLUE)
+        assertTrue(upperVertex.topY < nearerCenter.topY)
+        assertEquals(upperVertex, shotAt(listOf(nearerCenter, upperVertex)))
+    }
+
+    @Test fun equalHeightPrefersCenterThenRightRegardlessOfListOrder() {
+        val left = GlassPiece(1, 0, 2, StarColor.BLUE)
+        val right = GlassPiece(2, 0, 3, StarColor.BLUE)
+        val outer = GlassPiece(3, 0, 5, StarColor.BLUE)
+        assertEquals(left, shotAt(listOf(outer, left)))
+        assertEquals(right, shotAt(listOf(left, outer, right)))
+        assertEquals(right, shotAt(listOf(right, outer, left)))
+    }
+
+    @Test fun highestFragmentMustBeReachableAndMatchTheStarColor() {
+        val blocked = GlassPiece(1, 1, 2, StarColor.BLUE)
+        val reachable = GlassPiece(2, 3, 4, StarColor.BLUE)
+        val glass = listOf(blocked, reachable,
+            GlassPiece(3, 0, 2, StarColor.GOLD), GlassPiece(4, 2, 2, StarColor.GOLD),
+            GlassPiece(5, 1, 1, StarColor.GOLD), GlassPiece(6, 1, 3, StarColor.GOLD))
+        assertEquals(reachable, shotAt(glass))
+    }
+
+    @Test fun storedStarsUseTheSameTargetPriority() {
+        val upper = GlassPiece(1, 0, 0, StarColor.BLUE)
+        val lower = GlassPiece(2, 4, 3, StarColor.BLUE)
+        val trigger = GlassPiece(3, 4, 0, StarColor.GREEN)
+        val state = GameState(level = 1, columns = 1,
+            queues = listOf(listOf(StarColor.GREEN)), glass = listOf(lower, trigger, upper),
+            storage = listOf(StarColor.BLUE))
+        val effects = ColorStarsEngine.takeStar(state, 0).effects.filterIsInstance<GameEffect.Projectile>()
+        assertEquals(upper, effects.last().target)
+        assertTrue(effects.last().origin is StarOrigin.Storage)
+    }
+
     @Test fun levelLayoutSupportsFourAndFiveQueues() {
         assertEquals(4, ColorStarsEngine.newGame(1).columns)
         assertEquals(5, ColorStarsEngine.newGame(2).columns)
@@ -82,6 +134,20 @@ class ColorStarsEngineTest {
         assertEquals(GameStatus.PLAYING, resumed.status)
         assertEquals(2, resumed.storage.size)
         assertEquals(state.coins - ColorStarsEngine.CONTINUE_COST, resumed.coins)
+    }
+
+    @Test fun topApproachCanReachEveryExposedFragmentWithoutCrossingOccupiedCells() {
+        val level = ColorStarsEngine.newGame(2)
+        val occupied = level.glass.map { GridPoint(it.column, it.row) }.toSet()
+        for (target in level.glass.filter { ColorStarsEngine.isExposed(it, level.glass) }) {
+            for (entry in 2..3) {
+                val route = ProjectileRouter.route(level.glass, target, entry, fromTop = true)
+                assertEquals(GridPoint(entry, -1), route.first())
+                assertTrue(route.none { it in occupied })
+                val last = route.last()
+                assertEquals(1, kotlin.math.abs(last.row - target.row) + kotlin.math.abs(last.column - target.column))
+            }
+        }
     }
 
     @Test fun projectilesMoveOnlyThroughEmptyCells() {
