@@ -14,10 +14,14 @@ data class GlassPiece(val id: Int, val row: Int, val column: Int, val color: Sta
 data class GlassVertex(val x: Float, val y: Float)
 
 // Shared by rendering and target selection so priority follows the actual vertices.
-fun glassCorner(column: Int, row: Int): GlassVertex = GlassVertex(
-    column + if (column == 0 || column == ColorStarsEngine.BOARD_COLUMNS) 0f
+fun glassCorner(
+    column: Int, row: Int,
+    boardColumns: Int = ColorStarsEngine.BOARD_COLUMNS,
+    boardRows: Int = ColorStarsEngine.BOARD_ROWS,
+): GlassVertex = GlassVertex(
+    column + if (column == 0 || column == boardColumns) 0f
         else sin((column * 7 + row * 13).toFloat()) * .12f,
-    row + if (row == 0 || row == ColorStarsEngine.BOARD_ROWS) 0f
+    row + if (row == 0 || row == boardRows) 0f
         else cos((column * 11 + row * 5).toFloat()) * .13f,
 )
 
@@ -29,6 +33,8 @@ data class Boosters(val extraSlot: Int = 2, val shatter: Int = 1, val pickStar: 
 data class GameState(
     val level: Int,
     val columns: Int,
+    val boardRows: Int = ColorStarsEngine.BOARD_ROWS,
+    val boardColumns: Int = ColorStarsEngine.BOARD_COLUMNS,
     val queues: List<List<StarColor>>,
     val glass: List<GlassPiece>,
     val storage: List<StarColor> = emptyList(),
@@ -69,8 +75,11 @@ object ColorStarsEngine {
     private val silhouette = listOf("011110", "111111", "111111", "011110", "001100")
 
     fun newGame(level: Int = 1, coins: Int = 850, boosters: Boosters = Boosters()): GameState {
+        val local = LocalLevels.get(level)
+        val boardRows = local?.boardRows ?: BOARD_ROWS
+        val boardColumns = local?.boardColumns ?: BOARD_COLUMNS
         val queueCount = if (level == 1) 4 else 5
-        val glass = buildList {
+        val glass = local?.glass ?: buildList {
             var id = 0
             silhouette.forEachIndexed { row, mask ->
                 mask.forEachIndexed { column, ch ->
@@ -81,12 +90,12 @@ object ColorStarsEngine {
                 }
             }
         }
-        // Generate an achievable destruction order. Splitting it across the queues
-        // ensures that playing the heads in round-robin order is a valid solution.
+        // Precompute a winning destruction order for curated as well as generated boards.
         val remaining = glass.toMutableList()
         val destructionOrder = mutableListOf<StarColor>()
         while (remaining.isNotEmpty()) {
-            val exposed = remaining.filter { isExposed(it, remaining) }
+            val exposed = remaining.filter { isExposed(it, remaining, boardRows, boardColumns) }
+            require(exposed.isNotEmpty()) { "Level $level has unreachable fragments" }
             val next = exposed.minWith(targetPriority)
             destructionOrder += next.color
             remaining.remove(next)
@@ -94,10 +103,16 @@ object ColorStarsEngine {
         val queues = List(queueCount) { index ->
             destructionOrder.filterIndexed { position, _ -> position % queueCount == index }
         }
-        return GameState(level = level, columns = queueCount, glass = glass, queues = queues, coins = coins, boosters = boosters)
+        return GameState(
+            level = level, columns = queueCount, boardRows = boardRows, boardColumns = boardColumns,
+            glass = glass, queues = queues, coins = coins, boosters = boosters,
+        )
     }
 
-    fun isExposed(piece: GlassPiece, glass: List<GlassPiece>): Boolean {
+    fun isExposed(
+        piece: GlassPiece, glass: List<GlassPiece>,
+        boardRows: Int = BOARD_ROWS, boardColumns: Int = BOARD_COLUMNS,
+    ): Boolean {
         val occupied = glass.map { it.row to it.column }.toSet()
         val hasEmptyNeighbor = listOf(
             piece.row - 1 to piece.column,
@@ -105,7 +120,8 @@ object ColorStarsEngine {
             piece.row to piece.column - 1,
             piece.row to piece.column + 1,
         ).any { it !in occupied }
-        return hasEmptyNeighbor && ProjectileRouter.route(glass, piece, BOARD_COLUMNS / 2).isNotEmpty()
+        return hasEmptyNeighbor &&
+            ProjectileRouter.route(glass, piece, boardColumns / 2, boardRows = boardRows, boardColumns = boardColumns).isNotEmpty()
     }
 
     fun isSelectable(state: GameState, queue: Int, row: Int): Boolean =
@@ -148,7 +164,7 @@ object ColorStarsEngine {
             mode = SelectionMode.NONE,
         )
         val effects = mutableListOf<GameEffect>()
-        val target = findExposedColor(next.glass, color)
+        val target = findExposedColor(next.glass, color, next.boardRows, next.boardColumns)
         if (target != null) {
             next = next.copy(glass = next.glass - target)
             effects += GameEffect.Projectile(color, StarOrigin.Queue(queue, row), target)
@@ -193,7 +209,7 @@ object ColorStarsEngine {
         var glass = state.glass
         val removed = state.storage.take(2)
         removed.forEach { color ->
-            val target = findExposedColor(glass, color)
+            val target = findExposedColor(glass, color, state.boardRows, state.boardColumns)
                 ?: glass.firstOrNull { it.color == color }
             if (target != null) {
                 glass = glass - target
@@ -221,10 +237,11 @@ object ColorStarsEngine {
         return state.copy(coins = state.coins - BOOSTER_COST, boosters = updated)
     }
 
-    private fun findExposedColor(glass: List<GlassPiece>, color: StarColor): GlassPiece? {
-        return glass.asSequence().filter { it.color == color && isExposed(it, glass) }
-            .minWithOrNull(targetPriority)
-    }
+    private fun findExposedColor(
+        glass: List<GlassPiece>, color: StarColor, boardRows: Int, boardColumns: Int,
+    ): GlassPiece? = glass.asSequence()
+        .filter { it.color == color && isExposed(it, glass, boardRows, boardColumns) }
+        .minWithOrNull(targetPriority)
 
     private fun releaseStored(state: GameState, effects: MutableList<GameEffect>): GameState {
         var glass = state.glass
@@ -245,7 +262,7 @@ object ColorStarsEngine {
         state.glass.isEmpty() -> state.copy(status = GameStatus.WON, mode = SelectionMode.NONE)
         state.status == GameStatus.LOST -> state
         state.queues.all { it.isEmpty() } && state.storage.none { color ->
-            findExposedColor(state.glass, color) != null
+            findExposedColor(state.glass, color, state.boardRows, state.boardColumns) != null
         } -> state.copy(status = GameStatus.LOST)
         else -> state
     }

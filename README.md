@@ -33,6 +33,13 @@ After the workflow completes, open the run and download the **ColorStars-debug-a
 
 The workflow uses JDK 17, Android SDK 35 and an installed Gradle 8.9 because the repository does not include Gradle wrapper files.
 
+## Local levels and automatic fallback
+- Level 1 is a hand-authored, 8×8 stained-glass owl inspired by the second concept illustration.
+- Its fragment colors and shape are defined in `LocalLevels.kt`, with removable face, eyes, wings and feet.
+- The game automatically uses the existing procedural generator starting at level 2, and after the last authored level.
+- Additional curated levels can be added to `LocalLevels.get()`; no network connection is required.
+- The source illustration is adapted into drawable glass fragments, not embedded as a static PNG.
+
 ## Architecture
 - `shared/.../game/ColorStarsEngine.kt`: pure reducer / deterministic level generation.
 - `shared/.../game/ProjectileRouter.kt`: BFS over empty grid cells, no rendering concerns.

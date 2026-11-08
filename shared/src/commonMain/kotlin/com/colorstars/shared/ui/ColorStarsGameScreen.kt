@@ -100,9 +100,12 @@ private fun StarColor.tint(): Color = when (this) {
     StarColor.PURPLE -> Color(0xFFB59AFE)
 }
 
-private data class BoardGeometry(val left: Float, val top: Float, val tileWidth: Float, val tileHeight: Float) {
-    val width: Float get() = tileWidth * ColorStarsEngine.BOARD_COLUMNS
-    val height: Float get() = tileHeight * ColorStarsEngine.BOARD_ROWS
+private data class BoardGeometry(
+    val left: Float, val top: Float, val tileWidth: Float, val tileHeight: Float,
+    val boardRows: Int, val boardColumns: Int,
+) {
+    val width: Float get() = tileWidth * boardColumns
+    val height: Float get() = tileHeight * boardRows
     fun tileCenter(piece: GlassPiece): Offset = Offset(left + (piece.column + .5f) * tileWidth, top + (piece.row + .5f) * tileHeight)
 }
 
@@ -150,7 +153,8 @@ fun ColorStarsGameScreen() {
                 val boardWidth = min(width * .78f, 324.dp.toPx())
                 val boardHeight = min(boardWidth * .84f, glassPx * .65f)
                 BoardGeometry((width - boardWidth) / 2f, header.toPx() + (glassPx - boardHeight) / 2f,
-                    boardWidth / ColorStarsEngine.BOARD_COLUMNS, boardHeight / ColorStarsEngine.BOARD_ROWS)
+                    boardWidth / game.boardColumns, boardHeight / game.boardRows,
+                    game.boardRows, game.boardColumns)
             }
             val screenWidth = with(density) { maxWidth.toPx() }
             val queuesY = with(density) { (header + glassArea + slotsHeight).toPx() }
@@ -307,12 +311,33 @@ private fun Mosaic(game: GameState, geometry: BoardGeometry, modifier: Modifier,
             drawPath(path, brush = Brush.linearGradient(listOf(tint.copy(alpha = .97f), tint.copy(alpha = .56f), tint.copy(alpha = .88f)),
                 start = Offset(center.x - geometry.tileWidth / 2, center.y - geometry.tileHeight / 2),
                 end = Offset(center.x + geometry.tileWidth / 2, center.y + geometry.tileHeight / 2)))
-            drawPath(path, color = Color(0xFFDBE9FF).copy(alpha = .70f), style = Stroke(width = 1.9f))
+            drawPath(path, color = if (game.level == 1) Color(0xFF281A2A) else Color(0xFFDBE9FF).copy(alpha = .70f),
+                style = Stroke(width = if (game.level == 1) 3.2f else 1.9f))
             drawPath(path, color = tint.copy(alpha = .24f), style = Stroke(width = 6f))
             drawLine(Color.White.copy(alpha = .26f),
                 Offset(center.x - geometry.tileWidth * .28f, center.y - geometry.tileHeight * .26f),
                 Offset(center.x - geometry.tileWidth * .03f, center.y - geometry.tileHeight * .39f),
                 strokeWidth = 1.7f, cap = StrokeCap.Round)
+            // Details from the owl concept live on the corresponding removable glass fragments.
+            if (game.level == 1 && tile.row == 3 && (tile.column == 2 || tile.column == 5)) {
+                val radius = min(geometry.tileWidth, geometry.tileHeight) * .33f
+                drawCircle(Color(0xFF361747), radius, center)
+                drawCircle(Color(0xFF100A22), radius * .7f, center)
+                drawCircle(Color.White.copy(alpha = .92f), radius * .21f,
+                    Offset(center.x - radius * .29f, center.y - radius * .30f))
+            }
+            if (game.level == 1 && tile.row == 4 && (tile.column == 3 || tile.column == 4)) {
+                val axisX = geometry.left + geometry.tileWidth * 4f
+                val top = geometry.top + geometry.tileHeight * 4.12f
+                val bottom = geometry.top + geometry.tileHeight * 4.84f
+                val sideX = axisX + geometry.tileWidth * (if (tile.column == 3) -.38f else .38f)
+                val beak = Path().apply {
+                    moveTo(axisX, top); lineTo(sideX, top + geometry.tileHeight * .15f)
+                    lineTo(axisX, bottom); close()
+                }
+                drawPath(beak, Color(0xFFFFA721))
+                drawPath(beak, Color(0xFF5C2942), style = Stroke(width = 2.4f))
+            }
             if (game.mode == SelectionMode.SHATTER_GLASS) {
                 drawPath(path, color = Color.White.copy(alpha = .53f), style = Stroke(width = 3f))
             }
@@ -324,7 +349,7 @@ private fun tilePath(tile: GlassPiece, geo: BoardGeometry): Path {
     val c = tile.column
     val r = tile.row
     fun corner(col: Int, row: Int): Offset {
-        val vertex = glassCorner(col, row)
+        val vertex = glassCorner(col, row, geo.boardColumns, geo.boardRows)
         return Offset(geo.left + vertex.x * geo.tileWidth, geo.top + vertex.y * geo.tileHeight)
     }
     val tl = corner(c, r)
@@ -565,7 +590,8 @@ private fun effectStart(
 
 private fun projectilePoints(start: Offset, geo: BoardGeometry, game: GameState, shot: GameEffect.Projectile): List<Offset> =
     ProjectileFlight.route(game.glass, shot.target,
-        GlassVertex((start.x - geo.left) / geo.tileWidth, (start.y - geo.top) / geo.tileHeight)
+        GlassVertex((start.x - geo.left) / geo.tileWidth, (start.y - geo.top) / geo.tileHeight),
+        game.boardRows, game.boardColumns,
     ).map { Offset(geo.left + it.x * geo.tileWidth, geo.top + it.y * geo.tileHeight) }
 private fun lengthOf(points: List<Offset>): Float = points.zipWithNext { a, b -> hypot(b.x - a.x, b.y - a.y) }.sum()
 

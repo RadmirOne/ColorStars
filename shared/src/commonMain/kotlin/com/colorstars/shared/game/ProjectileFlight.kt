@@ -9,9 +9,11 @@ object ProjectileFlight {
 
     private data class Bounds(val left: Float, val top: Float, val right: Float, val bottom: Float)
 
-    private fun bounds(piece: GlassPiece): Bounds {
-        val corners = listOf(glassCorner(piece.column, piece.row), glassCorner(piece.column + 1, piece.row),
-            glassCorner(piece.column + 1, piece.row + 1), glassCorner(piece.column, piece.row + 1))
+    private fun bounds(piece: GlassPiece, boardRows: Int, boardColumns: Int): Bounds {
+        val corners = listOf(glassCorner(piece.column, piece.row, boardColumns, boardRows),
+            glassCorner(piece.column + 1, piece.row, boardColumns, boardRows),
+            glassCorner(piece.column + 1, piece.row + 1, boardColumns, boardRows),
+            glassCorner(piece.column, piece.row + 1, boardColumns, boardRows))
         return Bounds(corners.minOf { it.x } - CLEARANCE, corners.minOf { it.y } - CLEARANCE,
             corners.maxOf { it.x } + CLEARANCE, corners.maxOf { it.y } + CLEARANCE)
     }
@@ -37,13 +39,17 @@ object ProjectileFlight {
             axis(a.y, b.y - a.y, box.top, box.bottom) && enter < leave
     }
 
-    fun route(glass: List<GlassPiece>, target: GlassPiece, start: GlassVertex): List<GlassVertex> {
-        val cells = ProjectileRouter.route(glass, target, start.x.toInt())
+    fun route(
+        glass: List<GlassPiece>, target: GlassPiece, start: GlassVertex,
+        boardRows: Int = ColorStarsEngine.BOARD_ROWS,
+        boardColumns: Int = ColorStarsEngine.BOARD_COLUMNS,
+    ): List<GlassVertex> {
+        val cells = ProjectileRouter.route(glass, target, start.x.toInt(), boardRows = boardRows, boardColumns = boardColumns)
         if (cells.isEmpty()) return emptyList()
-        val obstacles = glass.map(::bounds)
+        val obstacles = glass.map { bounds(it, boardRows, boardColumns) }
         val shortcutObstacles = obstacles.map { Bounds(it.left - .06f, it.top - .06f, it.right + .06f, it.bottom + .06f) }
         val edge = cells.last()
-        val targetBounds = bounds(target)
+        val targetBounds = bounds(target, boardRows, boardColumns)
         // Stop just outside the target's expanded boundary: the core touches the glass.
         val impact = when {
             edge.column < target.column -> GlassVertex(targetBounds.left - .001f, target.row + .5f)

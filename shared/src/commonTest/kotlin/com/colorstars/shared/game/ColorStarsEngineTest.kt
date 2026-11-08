@@ -58,6 +58,32 @@ class ColorStarsEngineTest {
         assertTrue(effects.last().origin is StarOrigin.Storage)
     }
 
+    @Test fun owlIsTheFirstLocalLevelAndLaterLevelsAreGenerated() {
+        val owl = ColorStarsEngine.newGame(1)
+        assertEquals(8, owl.boardRows)
+        assertEquals(8, owl.boardColumns)
+        assertEquals(56, owl.glass.size)
+        assertEquals(4, owl.columns)
+        assertEquals(LocalLevels.LAST_LOCAL_LEVEL, 1)
+        val generated = ColorStarsEngine.newGame(2)
+        assertEquals(5, generated.boardRows)
+        assertEquals(6, generated.boardColumns)
+        assertEquals(5, generated.columns)
+        assertTrue(LocalLevels.get(2) == null)
+    }
+
+    @Test fun authoredOwlCanBeCompletedWithoutBoosters() {
+        var game = ColorStarsEngine.newGame(1)
+        var moves = 0
+        while (game.status == GameStatus.PLAYING && moves < 100) {
+            game = ColorStarsEngine.takeStar(game, moves % game.columns).state
+            moves++
+        }
+        assertEquals(GameStatus.WON, game.status)
+        assertEquals(56, moves)
+        assertTrue(game.glass.isEmpty())
+    }
+
     @Test fun levelLayoutSupportsFourAndFiveQueues() {
         assertEquals(4, ColorStarsEngine.newGame(1).columns)
         assertEquals(5, ColorStarsEngine.newGame(2).columns)
