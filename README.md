@@ -26,6 +26,13 @@ gradle :androidApp:assembleDebug
 gradle :shared:testDebugUnitTest
 ```
 
+## Debug APK from GitHub Actions
+The [Android Debug APK workflow](https://github.com/RadmirOne/ColorStars/actions/workflows/android-debug.yml) builds `androidApp` on every push to `main` and on pull requests. You can also trigger it manually via **Actions → Android Debug APK → Run workflow**.
+
+After the workflow completes, open the run and download the **ColorStars-debug-apk** artifact. Unzip it to get the installable `androidApp-debug.apk` (requires allowing installation of apps from that source on your Android device). Artifacts are retained for 14 days.
+
+The workflow uses JDK 17, Android SDK 35 and an installed Gradle 8.9 because the repository does not include Gradle wrapper files.
+
 ## Architecture
 - `shared/.../game/ColorStarsEngine.kt`: pure reducer / deterministic level generation.
 - `shared/.../game/ProjectileRouter.kt`: BFS over empty grid cells, no rendering concerns.
